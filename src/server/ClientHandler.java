@@ -13,8 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 클라이언트 연결 하나를 맡는 작업. 연결 1개 = ClientHandler 1개 = 스레드 1개.
  * OrderServer가 new Thread(handler, "client-N").start()로 실행한다 (강의 p.53, Runnable 방식).
  *
- * ② 다중 접속 단계: 받은 줄을 그대로 돌려준다(임시 에코).
- * ③ 요청 분배 단계: process()를 CommandRouter 호출로 바꾼다.
+ * 받은 줄은 process()로 넘긴다. 지금은 기록만 하고, ③ 요청 분배 단계에서 CommandRouter 호출로 채운다.
  */
 final class ClientHandler implements Runnable {
 
@@ -52,7 +51,7 @@ final class ClientHandler implements Runnable {
                     process(line);
                 } catch (RuntimeException e) {         // 메시지 하나가 실패해도 연결은 유지
                     Log.error("처리 실패: " + line + " (" + e + ")");
-                    send("ERR|BAD_REQUEST");           // 오류 코드 이름은 5번과 합의 후 확정
+                    // ③에서 5번과 정한 오류 코드로 응답한다
                 }
             }
         } catch (IOException e) {
@@ -63,9 +62,12 @@ final class ClientHandler implements Runnable {
         }
     }
 
-    /** ② 단계 임시 처리: 받은 줄을 그대로 돌려준다. ③에서 요청 분배로 바꾼다. */
+    /**
+     * 받은 메시지를 처리하는 자리. ③ 요청 분배 단계에서 CommandRouter 호출로 채운다.
+     * 그 전까지는 응답하지 않는다 (받은 내용은 run()에서 기록한다).
+     */
     private void process(String line) {
-        send("ECHO|" + line);
+        // ③에서 구현: 명령 해석 → 상태 검사 → 담당 코드로 분배
     }
 
     /**
