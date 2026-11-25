@@ -1,0 +1,5 @@
+# 스크립트 줄바꿈 고정: Windows에서 받아도 .sh가 CRLF로 바뀌어 깨지지 않게
+*.sh  text eol=lf
+*.cmd text eol=crlf
+*.java text
+*.md   text
