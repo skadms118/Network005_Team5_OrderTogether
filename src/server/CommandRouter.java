@@ -14,7 +14,10 @@ import java.util.Map;
  */
 final class CommandRouter {
 
-    /** 명령별 필드 개수. 모르는 명령이거나 개수가 모자라거나 남으면 ERR|BAD_REQUEST. */
+    /**
+     * 명령별 필드 개수. 모르는 명령이거나 개수가 모자라거나 남으면 ERR|BAD_REQUEST.
+     * 단, CREATE·JOIN에서 필드가 남는 것은 이름에 '|'가 들어간 경우뿐이라 제안서대로 ERR|INVALID_NAME (p.8, p.11).
+     */
     private static final Map<String, Integer> FIELD_COUNT = Map.of(
             Protocol.ROOMS, 0,
             Protocol.CREATE, 2,      // CREATE|닉네임|방이름
@@ -39,8 +42,14 @@ final class CommandRouter {
     void dispatch(ClientHandler client, String line) {
         Message message = Protocol.parse(line);
         Integer expected = FIELD_COUNT.get(message.command);
-        if (expected == null || message.size() != expected) {
-            reject(client, ErrorCode.BAD_REQUEST);
+        if (expected == null) {
+            reject(client, ErrorCode.BAD_REQUEST);       // 모르는 명령
+            return;
+        }
+        if (message.size() != expected) {
+            boolean nameHasBar = message.size() > expected
+                    && (message.command.equals(Protocol.CREATE) || message.command.equals(Protocol.JOIN));
+            reject(client, nameHasBar ? ErrorCode.INVALID_NAME : ErrorCode.BAD_REQUEST);
             return;
         }
 

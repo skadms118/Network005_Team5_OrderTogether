@@ -57,10 +57,8 @@ final class RoomManager {
      * CREATE: 방을 만들고 만든 사람을 방장으로 넣는다.
      * 응답: OK|CREATE|방번호|토큰 → (MENU) → STATUS|||0, 그 뒤 로비에 ROOM_LIST
      */
-    void create(ClientHandler client, String nickname, String roomName) {
-        String nick = nickname.trim();
-        String name = roomName.trim();
-        if (!Protocol.isValidName(nick) || !Protocol.isValidName(name)) {
+    void create(ClientHandler client, String nick, String name) {
+        if (!Protocol.isValidName(nick) || !Protocol.isValidName(name)) {  // 제안서 p.8, p.11: 빈 이름, | , : 금지
             client.send(Protocol.error(ErrorCode.INVALID_NAME));
             return;
         }
@@ -81,8 +79,7 @@ final class RoomManager {
      * 여러 명이 동시에 들어와도 정원(5명)을 넘거나 같은 닉네임이 두 번 들어가지 않는다 (⑤).
      * 응답: OK|JOIN|토큰 → (MENU) → (STATUS), 그 뒤 로비에 ROOM_LIST
      */
-    void join(ClientHandler client, int roomId, String nickname) {
-        String nick = nickname.trim();
+    void join(ClientHandler client, int roomId, String nick) {
         if (!Protocol.isValidName(nick)) {
             client.send(Protocol.error(ErrorCode.INVALID_NAME));
             return;
@@ -117,7 +114,7 @@ final class RoomManager {
         pushRoomList();
     }
 
-    /** LEAVE: 방에서 나간다. 나간 사람에게 OK|LEAVE를 보낸다. */
+    /** LEAVE: 방에서 나간다. 멤버는 OK|LEAVE, 방장은 방 전원과 함께 ROOM_END를 받는다. */
     void leave(ClientHandler client) {
         exit(client, true);
     }
@@ -131,12 +128,17 @@ final class RoomManager {
     }
 
     /**
-     * 퇴장 처리. 멤버가 나가면 남은 사람에게 STATUS, 방장이 나가면 남은 사람에게 ROOM_END를 보내고 방을 없앤다 (제안서 p.9).
+     * 퇴장 처리 (제안서 p.9, p.12).
+     *   멤버: 남은 사람에게 STATUS, 나간 사람에게 OK|LEAVE
+     *   방장: 방장 포함 방 전원에게 ROOM_END ("LEAVE → ROOM_END to all"), 방 삭제
      */
     private void exit(ClientHandler client, boolean reply) {
         Room room = client.room();
         String nick = client.nickname();
-        if (room == null) {
+        if (room == null) {  // 방장이 먼저 나가 이미 로비로 돌아온 경우 (ROOM_END를 이미 받음)
+            if (reply) {
+                client.send(Protocol.ok(Protocol.LEAVE));
+            }
             return;
         }
         String result;
@@ -148,25 +150,25 @@ final class RoomManager {
                 }
                 return;
             }
-            room.remove(nick);
             if (room.isHost(nick)) {
                 room.markDeleted();
                 rooms.remove(room.id());
-                for (ClientHandler other : room.connections()) {
-                    other.leaveRoom();
-                    other.send(Protocol.ROOM_END);
+                room.broadcast(Protocol.ROOM_END);  // 방장 포함 전원
+                for (ClientHandler member : room.connections()) {
+                    member.leaveRoom();
                 }
                 room.clearMembers();
                 hooks.onRoomEnded(room);
                 result = "방장 " + nick + " 퇴장, " + room.id() + "번 방 종료";
             } else {
+                room.remove(nick);
                 hooks.onMemberLeft(room, nick);                    // 2번: 마감 전이면 나간 사람 주문 삭제
                 broadcastIfPresent(room, hooks.statusLine(room));  // 남은 사람에게 바뀐 현황
+                client.leaveRoom();
+                if (reply) {
+                    client.send(Protocol.ok(Protocol.LEAVE));
+                }
                 result = nick + " 퇴장, " + room.id() + "번 방 " + room.size() + "/" + Room.MAX_MEMBERS;
-            }
-            client.leaveRoom();
-            if (reply) {
-                client.send(Protocol.ok(Protocol.LEAVE));
             }
         }
         Log.info(result + (reply ? "" : " (연결 끊김)"));
