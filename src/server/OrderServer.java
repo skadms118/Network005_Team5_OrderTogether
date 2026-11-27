@@ -12,17 +12,40 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   1. TCP 소켓 만들기 (포트 열기)  → open()
  *   2. 반복: 연결 대기·수락          → serve()
  * 연결을 받으면 클라이언트마다 스레드를 하나씩 띄워 ClientHandler에 맡긴다 (멀티스레드 서버, 강의 p.48).
+ * 받은 요청은 CommandRouter가 나누고, 방은 RoomManager가 관리한다.
  */
 final class OrderServer {
 
     private final int port;
     private final AtomicInteger nextId = new AtomicInteger(1);                 // 연결 번호: client-1, client-2 ...
     private final Set<ClientHandler> clients = ConcurrentHashMap.newKeySet();  // 접속 중인 연결 (여러 스레드가 동시에 넣고 뺌)
+    private final TeamHooks hooks = new TeamHooks();                          // 2번·3번 연결 자리
+    private final RoomManager rooms = new RoomManager(this, hooks);
+    private final CommandRouter router = new CommandRouter(rooms, hooks);
     private volatile ServerSocket serverSocket;  // welcoming socket: 접속 요청을 기다리는 소켓
     private volatile boolean running;
 
     OrderServer(int port) {
         this.port = port;
+    }
+
+    /** 요청 분배기. 각 연결의 스레드가 받은 줄을 넘길 때 쓴다. */
+    CommandRouter router() {
+        return router;
+    }
+
+    /** 방 관리자. 2번이 마감 뒤 로비에 방 목록을 보낼 때(pushRoomList) 쓴다. */
+    RoomManager rooms() {
+        return rooms;
+    }
+
+    /** 로비(방에 없는 연결) 전원에게 한 줄을 보낸다. 방 락 안에서 부르지 않는다. */
+    void broadcastLobby(String line) {
+        for (ClientHandler client : clients) {
+            if (client.room() == null) {
+                client.send(line);
+            }
+        }
     }
 
     /**
@@ -82,11 +105,15 @@ final class OrderServer {
 
     /**
      * 연결 하나가 끝났을 때 그 연결의 스레드가 부른다 (ClientHandler.run()의 finally).
-     * 이후 단계에서 방 퇴장(④)과 세션 정리(3번 담당)를 여기서 부른다.
+     * 방에 있던 연결이면 방에서 내보낸다 (기본 단계: LEAVE와 같게 처리, 방장이면 ROOM_END).
+     * 재접속 확장을 붙일 때 3번의 세션 정리·유예 처리를 여기서 부른다.
      */
     void onDisconnect(ClientHandler handler) {
         if (clients.remove(handler)) {
             Log.info("접속 종료 (현재 " + clients.size() + "명)");
+        }
+        if (handler.room() != null) {
+            rooms.onConnectionLost(handler);
         }
     }
 

@@ -1,5 +1,8 @@
 package server;
 
+import common.ErrorCode;
+import common.Protocol;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -13,7 +16,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 클라이언트 연결 하나를 맡는 작업. 연결 1개 = ClientHandler 1개 = 스레드 1개.
  * OrderServer가 new Thread(handler, "client-N").start()로 실행한다 (강의 p.53, Runnable 방식).
  *
- * 받은 줄은 process()로 넘긴다. 지금은 기록만 하고, ③ 요청 분배 단계에서 CommandRouter 호출로 채운다.
+ * 받은 줄은 CommandRouter로 넘긴다 (③ 요청 분배).
+ * 이 연결이 있는 방과 닉네임을 기억한다 (방이 null이면 로비).
  */
 final class ClientHandler implements Runnable {
 
@@ -23,6 +27,8 @@ final class ClientHandler implements Runnable {
     private final BufferedReader in;
     private final BufferedWriter out;
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    private volatile Room room;          // 지금 들어가 있는 방 (null이면 로비). 방장이 나가면 다른 스레드가 바꾸므로 volatile
+    private volatile String nickname;    // 방에서 쓰는 닉네임 (CREATE·JOIN 때 정해짐)
 
     /**
      * 소켓에 UTF-8 읽기·쓰기 스트림을 연결한다.
@@ -46,12 +52,12 @@ final class ClientHandler implements Runnable {
                 if (line.isBlank()) {
                     continue;
                 }
-                Log.info("받음: " + line);
+                Log.info("받음: " + forLog(line));
                 try {
-                    process(line);
+                    server.router().dispatch(this, line);
                 } catch (RuntimeException e) {         // 메시지 하나가 실패해도 연결은 유지
-                    Log.error("처리 실패: " + line + " (" + e + ")");
-                    // ③에서 5번과 정한 오류 코드로 응답한다
+                    Log.error("처리 실패: " + forLog(line) + " (" + e + ")");
+                    send(Protocol.error(ErrorCode.BAD_REQUEST));
                 }
             }
         } catch (IOException e) {
@@ -62,12 +68,30 @@ final class ClientHandler implements Runnable {
         }
     }
 
-    /**
-     * 받은 메시지를 처리하는 자리. ③ 요청 분배 단계에서 CommandRouter 호출로 채운다.
-     * 그 전까지는 응답하지 않는다 (받은 내용은 run()에서 기록한다).
-     */
-    private void process(String line) {
-        // ③에서 구현: 명령 해석 → 상태 검사 → 담당 코드로 분배
+    /** 로그에 남길 형태. 재접속 토큰은 로그에 남기지 않는다. */
+    private static String forLog(String line) {
+        return line.startsWith(Protocol.RECONNECT + "|") ? Protocol.RECONNECT + "|(토큰 생략)" : line;
+    }
+
+    /** 지금 들어가 있는 방 (null이면 로비) */
+    Room room() {
+        return room;
+    }
+
+    /** 방에서 쓰는 닉네임 */
+    String nickname() {
+        return nickname;
+    }
+
+    /** 방에 들어갔을 때 RoomManager가 부른다 (방 락 안). */
+    void enterRoom(Room room, String nickname) {
+        this.nickname = nickname;
+        this.room = room;
+    }
+
+    /** 방에서 나왔을 때(LEAVE, ROOM_END, 연결 끊김) RoomManager가 부른다 (방 락 안). */
+    void leaveRoom() {
+        this.room = null;
     }
 
     /**
